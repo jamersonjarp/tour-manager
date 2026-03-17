@@ -2387,6 +2387,8 @@ function App(props){
     var esList=[];var ivList=[];
     // Initial fetch — ONE TIME full load, then per-key SSE
     fetch(chatFbUrl+'/appdata.json').then(function(r){return r.json();}).then(function(d){
+      // One-time cleanup: remove seed reservas from Mar 8-10
+      if(d&&d.reservas){var ra=Array.isArray(d.reservas)?d.reservas.filter(function(r){return r!==null;}):Object.values(d.reservas).filter(function(r){return r!==null;});var cleaned=ra.filter(function(r){return r.fecha!=="2026-03-08"&&r.fecha!=="2026-03-09"&&r.fecha!=="2026-03-10";});if(cleaned.length<ra.length){d.reservas=cleaned;fetch(chatFbUrl+'/appdata/reservas.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cleaned)});console.log("Cleanup: removed "+(ra.length-cleaned.length)+" seed reservas");}}
       applyData(d);
       // Now open per-key SSE streams — each only sends data for that key
       FB_SYNC_KEYS.forEach(function(key){
