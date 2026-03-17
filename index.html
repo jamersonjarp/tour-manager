@@ -2275,7 +2275,7 @@ function App(props){
   var _auth=useState(false),isAuthenticated=_auth[0],setIsAuthenticated=_auth[1];
   var _cu=useState(null),currentUser=_cu[0],setCurrentUser=_cu[1];
   var _users=useState(loadFromStorage("usuarios_data",DEFAULT_USERS)),users=_users[0],setUsers=_users[1];
-  var _res=useState(ensureIds(loadFromStorage("reservas_data",RAW.reservas))),reservas=_res[0],setReservas=_res[1];
+  var _res=useState(ensureIds(loadFromStorage("reservas_data",RAW.reservas)).filter(function(r){return r.fecha!=="2026-03-08"&&r.fecha!=="2026-03-09"&&r.fecha!=="2026-03-10";})),reservas=_res[0],setReservas=_res[1];
   var _nom=useState(loadFromStorage("nomina_data",NOMINA)),nomina=_nom[0],setNomina=_nom[1];
   var _p=useState("dashboard"),page=_p[0],setPage=_p[1];
   var _d=useState(false),dark=_d[0],setDark=_d[1];
@@ -2362,9 +2362,9 @@ function App(props){
   var reservasRef=React.useRef(reservas);reservasRef.current=reservas;
   var nominaRef=React.useRef(nomina);nominaRef.current=nomina;
   // ── Per-key apply helpers ──
-  function applyUsers(val){if(!val||fbDirty.current.usuarios)return;var su=fbArr(val);if(su.length>0){fbApplying.current=true;var localU=usersRef.current;var fbUIds=su.map(function(u){return u.id;});var localOnlyU=localU.filter(function(u){return fbUIds.indexOf(u.id)===-1;});var mergedU=localOnlyU.length>0?su.concat(localOnlyU):su;setUsers(mergedU);saveToStorage('usuarios_data',mergedU);setTimeout(function(){fbApplying.current=false;},100);}}
-  function applyReservas(val){if(!val||fbDirty.current.reservas)return;fbApplying.current=true;var sr=ensureIds(fbArr(val));var localR=reservasRef.current;var fbRIds=sr.map(function(r){return r.id;});var localOnlyR=localR.filter(function(r){return fbRIds.indexOf(r.id)===-1;});var mergedR=localOnlyR.length>0?sr.concat(localOnlyR):sr;setReservas(mergedR);saveToStorage('reservas_data',mergedR);setTimeout(function(){fbApplying.current=false;},100);}
-  function applyNomina(val){if(!val||fbDirty.current.nomina)return;fbApplying.current=true;var nm=Object.assign({},val);nm.operacion=fbArr(nm.operacion);nm.nominaGuias=fbArr(nm.nominaGuias);nm.nominaConductores=fbArr(nm.nominaConductores);nm.cierre=fbArr(nm.cierre);var localNom=nominaRef.current;var localOp=fbArr(localNom.operacion||[]);var fbOpIds=nm.operacion.map(function(o){return o.id;});var localOnlyOp=localOp.filter(function(o){return fbOpIds.indexOf(o.id)===-1;});if(localOnlyOp.length>0){nm.operacion=nm.operacion.concat(localOnlyOp);}setNomina(nm);saveToStorage('nomina_data',nm);setTimeout(function(){fbApplying.current=false;},100);}
+  function applyUsers(val){if(!val||fbDirty.current.usuarios)return;var su=fbArr(val);if(su.length>0){fbApplying.current=true;setUsers(su);saveToStorage('usuarios_data',su);setTimeout(function(){fbApplying.current=false;},100);}}
+  function applyReservas(val){if(!val||fbDirty.current.reservas)return;fbApplying.current=true;var sr=ensureIds(fbArr(val));sr=sr.filter(function(r){return r.fecha!=="2026-03-08"&&r.fecha!=="2026-03-09"&&r.fecha!=="2026-03-10";});setReservas(sr);saveToStorage('reservas_data',sr);setTimeout(function(){fbApplying.current=false;},100);}
+  function applyNomina(val){if(!val||fbDirty.current.nomina)return;fbApplying.current=true;var nm=Object.assign({},val);nm.operacion=fbArr(nm.operacion);nm.nominaGuias=fbArr(nm.nominaGuias);nm.nominaConductores=fbArr(nm.nominaConductores);nm.cierre=fbArr(nm.cierre);setNomina(nm);saveToStorage('nomina_data',nm);setTimeout(function(){fbApplying.current=false;},100);}
   function applySimple(key,setter,storageKey,val){if(!val||fbDirty.current[key])return;fbApplying.current=true;var v=Array.isArray(val)?val:(val&&typeof val==="object"&&!Array.isArray(val))?val:fbArr(val);setter(v);saveToStorage(storageKey,v);setTimeout(function(){fbApplying.current=false;},100);}
 
   function applyData(d){
@@ -2390,46 +2390,42 @@ function App(props){
       // One-time cleanup: remove seed reservas from Mar 8-10
       if(d&&d.reservas){var ra=Array.isArray(d.reservas)?d.reservas.filter(function(r){return r!==null;}):Object.values(d.reservas).filter(function(r){return r!==null;});var cleaned=ra.filter(function(r){return r.fecha!=="2026-03-08"&&r.fecha!=="2026-03-09"&&r.fecha!=="2026-03-10";});if(cleaned.length<ra.length){d.reservas=cleaned;fetch(chatFbUrl+'/appdata/reservas.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cleaned)});console.log("Cleanup: removed "+(ra.length-cleaned.length)+" seed reservas");}}
       applyData(d);
-      // Now open per-key SSE streams — each only sends data for that key
-      FB_SYNC_KEYS.forEach(function(key){
+      // Now open per-key SSE streams with auto-reconnect
+      function openSSE(key){
         try{
           var es=new EventSource(chatFbUrl+'/appdata/'+key+'.json');
           es.addEventListener('put',function(e){
             try{
               var payload=JSON.parse(e.data);
-              var obj={};obj[key]=payload.data;
-              applyData(obj);
+              if(payload.path==="/"){var obj={};obj[key]=payload.data;applyData(obj);}
+              else{
+                // Sub-path update — fetch full data for this key
+                fetch(chatFbUrl+'/appdata/'+key+'.json').then(function(r){return r.json();}).then(function(val){var obj={};obj[key]=val;applyData(obj);}).catch(function(){});
+              }
             }catch(err){}
           });
           es.addEventListener('patch',function(e){
-            try{
-              var payload=JSON.parse(e.data);
-              var obj={};obj[key]=payload.data;
-              applyData(obj);
-            }catch(err){}
+            // Patch = partial update — fetch full data to ensure consistency
+            fetch(chatFbUrl+'/appdata/'+key+'.json').then(function(r){return r.json();}).then(function(val){var obj={};obj[key]=val;applyData(obj);}).catch(function(){});
           });
           es.onerror=function(){
-            // SSE failed for this key — fall back to per-key polling every 60s
             es.close();
             var idx=esList.indexOf(es);if(idx>-1)esList.splice(idx,1);
-            var piv=setInterval(function(){
-              fetch(chatFbUrl+'/appdata/'+key+'.json').then(function(r){return r.json();}).then(function(val){
-                var obj={};obj[key]=val;applyData(obj);
-              }).catch(function(){});
-            },60000);
-            ivList.push(piv);
+            // Auto-reconnect after 5 seconds instead of falling to slow polling
+            setTimeout(function(){var newEs=openSSE(key);if(newEs)esList.push(newEs);},5000);
           };
           esList.push(es);
-        }catch(ex){
-          // SSE not available — per-key polling every 60s
-          var piv=setInterval(function(){
-            fetch(chatFbUrl+'/appdata/'+key+'.json').then(function(r){return r.json();}).then(function(val){
-              var obj={};obj[key]=val;applyData(obj);
-            }).catch(function(){});
-          },60000);
-          ivList.push(piv);
-        }
-      });
+          return es;
+        }catch(ex){return null;}
+      }
+      FB_SYNC_KEYS.forEach(function(key){openSSE(key);});
+      // Fallback polling every 30s for all keys (in case SSE silently fails)
+      var pollIv=setInterval(function(){
+        FB_SYNC_KEYS.forEach(function(key){
+          fetch(chatFbUrl+'/appdata/'+key+'.json').then(function(r){return r.json();}).then(function(val){var obj={};obj[key]=val;applyData(obj);}).catch(function(){});
+        });
+      },30000);
+      ivList.push(pollIv);
     }).catch(function(){});
     return function(){esList.forEach(function(es){es.close();});ivList.forEach(function(iv){clearInterval(iv);});};
   },[chatFbUrl]);
